@@ -101,17 +101,24 @@ class VoiceListener:
         *,
         wake_phrase: str = "hey claude",
         end_phrase: str = "send it",
+        lock_phrase: str = "lock the pane",
+        unlock_phrase: str = "unlock the pane",
         model: str = "mlx-community/whisper-small-mlx",
         device: Optional[int | str] = None,
         verbose: bool = True,
     ):
         self.wake = wake_phrase.lower().strip()
         self.end = end_phrase.lower().strip()
+        self.lock = lock_phrase.lower().strip()
+        self.unlock = unlock_phrase.lower().strip()
         self.model = model
         self.device = device
         self.verbose = verbose
 
         self.command_queue: queue.Queue[str] = queue.Queue()
+        # Control queue carries "lock" / "unlock" events. Independent of the
+        # wake/end command path; control phrases trigger immediately.
+        self.control_queue: queue.Queue[str] = queue.Queue()
         self._utt_queue: queue.Queue[np.ndarray] = queue.Queue()
         self._stop = threading.Event()
         self._mic_stream: Optional[sd.InputStream] = None
@@ -226,6 +233,13 @@ class VoiceListener:
         except queue.Empty:
             return None
 
+    def get_control(self) -> Optional[str]:
+        """Return 'lock' / 'unlock' if a control phrase was just heard, else None."""
+        try:
+            return self.control_queue.get_nowait()
+        except queue.Empty:
+            return None
+
     # ---- mic callback (audio thread; do almost nothing here) ----
 
     def _audio_cb(self, indata: np.ndarray, frames: int, t, status) -> None:
@@ -300,9 +314,31 @@ class VoiceListener:
     # ---- wake/command/end state machine ----
 
     def _process_transcript(self, text: str) -> None:
-        """Update wake/command/end state. Emits commands when end is matched."""
+        """Update wake/command/end state. Emits commands when end is matched.
+
+        Lock/unlock control phrases short-circuit: they trigger immediately and
+        do not flow through the wake/end command path or get typed into a pane.
+        """
         if not text:
             return
+        # Control phrases first; check the more specific (longer) one first so
+        # 'unlock the pane' isn't shadowed by 'lock the pane'.
+        if self.unlock and self.unlock in text:
+            if self.verbose:
+                print(f"[{_ts()}] [voice] -> unlock", flush=True)
+            self.control_queue.put("unlock")
+            # Reset any in-progress command capture; the user wants control back.
+            self._cmd_state = "idle"
+            self._cmd_buffer = ""
+            return
+        if self.lock and self.lock in text:
+            if self.verbose:
+                print(f"[{_ts()}] [voice] -> lock", flush=True)
+            self.control_queue.put("lock")
+            self._cmd_state = "idle"
+            self._cmd_buffer = ""
+            return
+
         now = time.time()
 
         # Time-out stale recording so a missed end phrase doesn't leave us

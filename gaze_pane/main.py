@@ -54,6 +54,8 @@ def cmd_run(args) -> int:
         voice = VoiceListener(
             wake_phrase=args.wake_phrase,
             end_phrase=args.end_phrase,
+            lock_phrase=args.lock_phrase,
+            unlock_phrase=args.unlock_phrase,
             model=args.voice_model,
             device=args.voice_device,
         )
@@ -90,6 +92,10 @@ def cmd_run(args) -> int:
         prev_pane_ids: tuple[str, ...] | None = None
         last_status_print = 0.0
         status_interval = max(0.5, args.status_every)
+        # Voice-driven lock: when True, gaze-driven activation is skipped and
+        # voice commands always go to `locked_session_id`.
+        pane_locked = False
+        locked_session_id: str | None = None
         print(f"[{_ts()}] running. dwell={args.dwell_ms}ms  hz={args.hz}  "
               f"alpha={args.alpha}  ctrl-c to quit.", flush=True)
 
@@ -150,13 +156,27 @@ def cmd_run(args) -> int:
                           f"iris=({f.iris_x:+.2f},{f.iris_y:+.2f}) -> {where}",
                           flush=True)
 
-            # Drain any voice commands; send them to whatever pane we currently
-            # consider focused. We don't gate this on "hit" because the user
-            # may have looked away after issuing the command.
+            # Drain voice control events (lock/unlock) before commands.
             if voice is not None:
+                ctrl = voice.get_control()
+                if ctrl == "lock":
+                    pane_locked = True
+                    locked_session_id = last_activated or active_session
+                    short = (locked_session_id[:8] if locked_session_id
+                             else "<none>")
+                    print(f"[{_ts()}] pane LOCKED to {short} "
+                          "(gaze ignored until 'unlock')", flush=True)
+                elif ctrl == "unlock":
+                    pane_locked = False
+                    locked_session_id = None
+                    print(f"[{_ts()}] pane UNLOCKED (gaze back in control)",
+                          flush=True)
+
                 cmd = voice.get_command()
                 if cmd:
-                    target_id = last_activated or active_session
+                    # Locked target wins; otherwise whatever we currently think is focused.
+                    target_id = (locked_session_id if pane_locked
+                                 else (last_activated or active_session))
                     target_sess = next(
                         (r.session for r in pane_rects
                          if r.session_id == target_id), None)
@@ -169,7 +189,8 @@ def cmd_run(args) -> int:
                             # newline in zsh/bash instead of submitting.
                             await target_sess.async_send_text(cmd + "\r")
                             print(f"[{_ts()}] voice -> "
-                                  f"{target_sess.session_id[:8]}: {cmd!r}",
+                                  f"{target_sess.session_id[:8]}: {cmd!r}"
+                                  f"{' (locked)' if pane_locked else ''}",
                                   flush=True)
                         except Exception as e:
                             print(f"[{_ts()}] voice send failed: {e!r}",
@@ -193,15 +214,20 @@ def cmd_run(args) -> int:
                 candidate = hit.session_id
                 candidate_since = now
             elif (now - candidate_since) * 1000.0 >= args.dwell_ms:
-                try:
-                    await activate_session(hit.session)
-                    last_activated = hit.session_id
-                    print(f"[{_ts()}] -> activated {hit.session_id[:8]} "
-                          f"(gaze {nx:+.2f},{ny:+.2f})", flush=True)
-                except Exception as e:
-                    print(f"[{_ts()}] activate failed: {e!r}", file=sys.stderr)
-                # Force a re-query of "active" on next refresh so our state stays honest.
-                next_pane_refresh = now
+                if pane_locked:
+                    # Gaze still tracks (and the overlay still shows), but
+                    # don't switch panes while locked.
+                    pass
+                else:
+                    try:
+                        await activate_session(hit.session)
+                        last_activated = hit.session_id
+                        print(f"[{_ts()}] -> activated {hit.session_id[:8]} "
+                              f"(gaze {nx:+.2f},{ny:+.2f})", flush=True)
+                    except Exception as e:
+                        print(f"[{_ts()}] activate failed: {e!r}", file=sys.stderr)
+                    # Force a re-query of "active" on next refresh so our state stays honest.
+                    next_pane_refresh = now
 
             await asyncio.sleep(tick_period)
 
@@ -238,7 +264,12 @@ def cmd_run(args) -> int:
         print(f"[{_ts()}] overlay enabled (translucent dot, main screen)",
               flush=True)
         try:
-            Overlay(get_gaze, stop_event, fps=args.overlay_fps).run()
+            Overlay(
+                get_gaze,
+                stop_event,
+                fps=args.overlay_fps,
+                smoothing_alpha=args.overlay_smoothing,
+            ).run()
         except KeyboardInterrupt:
             print(f"\n[{_ts()}] stopping...", flush=True)
         finally:

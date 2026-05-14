@@ -58,6 +58,12 @@ def main() -> int:
                          "position (green when inside a known pane, red when outside)")
     pr.add_argument("--overlay-fps", dest="overlay_fps", type=float, default=30.0,
                     help="overlay redraw rate (default 30). Ignored without --overlay.")
+    pr.add_argument("--overlay-smoothing", dest="overlay_smoothing",
+                    type=float, default=0.2,
+                    help="EMA alpha applied to the dot's screen position "
+                         "(default 0.2; lower = smoother / laggier). This is "
+                         "independent of --alpha, which controls the feature-"
+                         "level smoothing that pane switches actually use.")
     pr.add_argument("--voice", action="store_true",
                     help="enable voice control: speak commands and they're sent to "
                          "the pane you're focused on")
@@ -66,6 +72,13 @@ def main() -> int:
     pr.add_argument("--end-phrase", dest="end_phrase", default="send it",
                     help="phrase that submits the voice command + Enter "
                          "(default: 'send it')")
+    pr.add_argument("--lock-phrase", dest="lock_phrase", default="lock the pane",
+                    help="phrase that locks the runner to the current pane so "
+                         "gaze stops switching it (default: 'lock the pane'). "
+                         "Bypasses wake/end.")
+    pr.add_argument("--unlock-phrase", dest="unlock_phrase", default="unlock the pane",
+                    help="phrase that re-enables gaze-driven pane switching "
+                         "(default: 'unlock the pane'). Bypasses wake/end.")
     pr.add_argument("--voice-model", dest="voice_model",
                     default="mlx-community/whisper-small-mlx",
                     help="MLX Whisper model id (default whisper-small-mlx). "
