@@ -46,14 +46,36 @@ class _GazeView(NSView):
         self._radius = 14.0
         self._hit = True   # whether the gaze landed in a known pane (green) or not (red)
         self._frame_size = (frame.size.width, frame.size.height)
+        # Display-level EMA on the rendered position. Independent of the
+        # feature-level smoothing used for pane hit-testing, so the dot looks
+        # calm without making pane-switch decisions laggier.
+        self._smooth_alpha = 0.2
+        self._smooth_x = -1.0
+        self._smooth_y = -1.0
         return self
 
     def isOpaque(self):
         return False
 
+    def setSmoothAlpha_(self, alpha: float):
+        a = float(alpha)
+        if a < 0.01:
+            a = 0.01
+        if a > 1.0:
+            a = 1.0
+        self._smooth_alpha = a
+
     def setX_y_hit_(self, x: float, y: float, hit: bool):
-        self._x = x
-        self._y = y
+        if x < 0 or self._smooth_x < 0:
+            # No prior position (or hidden); snap, don't interpolate.
+            self._smooth_x = x
+            self._smooth_y = y
+        else:
+            a = self._smooth_alpha
+            self._smooth_x = a * x + (1.0 - a) * self._smooth_x
+            self._smooth_y = a * y + (1.0 - a) * self._smooth_y
+        self._x = self._smooth_x
+        self._y = self._smooth_y
         self._hit = bool(hit)
         self.setNeedsDisplay_(True)
 
@@ -121,10 +143,12 @@ class Overlay:
         get_gaze: Callable[[], Optional[tuple[float, float, bool]]],
         stop_event: threading.Event,
         fps: float = 30.0,
+        smoothing_alpha: float = 0.2,
     ):
         self._get_gaze = get_gaze
         self._stop_event = stop_event
         self._fps = max(5.0, fps)
+        self._smoothing_alpha = float(smoothing_alpha)
 
     def run(self) -> None:
         # Make Ctrl-C exit even though the main thread is inside AppKit.run().
@@ -163,6 +187,7 @@ class Overlay:
             | NSWindowCollectionBehaviorFullScreenAuxiliary
         )
         view = _GazeView.alloc().initWithFrame_(frame)
+        view.setSmoothAlpha_(self._smoothing_alpha)
         window.setContentView_(view)
         # orderFrontRegardless_ forces this window in front even when iTerm2 in
         # fullscreen owns the active Space. Plain orderFront_ won't cross over.
