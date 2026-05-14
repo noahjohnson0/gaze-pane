@@ -41,7 +41,12 @@ def cmd_run(args) -> int:
     base = GazeTracker(camera_index=args.camera)
     base.start()
     print(f"[{_ts()}] webcam + face landmarker running", flush=True)
-    tracker = SmoothedTracker(base, alpha=args.alpha)
+    tracker = SmoothedTracker(
+        base,
+        alpha=args.alpha,
+        mode=args.smoothing,
+        window=args.median_window,
+    )
 
     voice = None
     if args.voice:
@@ -50,6 +55,7 @@ def cmd_run(args) -> int:
             wake_phrase=args.wake_phrase,
             end_phrase=args.end_phrase,
             model=args.voice_model,
+            device=args.voice_device,
         )
         try:
             voice.start()
@@ -158,7 +164,10 @@ def cmd_run(args) -> int:
                         target_sess = pane_rects[0].session
                     if target_sess is not None:
                         try:
-                            await target_sess.async_send_text(cmd + "\n")
+                            # \r (CR) is what Enter sends in a TTY; \n (LF) is
+                            # what Shift+Enter sends and lands as a literal
+                            # newline in zsh/bash instead of submitting.
+                            await target_sess.async_send_text(cmd + "\r")
                             print(f"[{_ts()}] voice -> "
                                   f"{target_sess.session_id[:8]}: {cmd!r}",
                                   flush=True)

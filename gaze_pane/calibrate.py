@@ -25,6 +25,65 @@ from .mapper import GazeMapper, default_calibration_path
 WIN_NAME = "gaze-pane calibration"
 
 
+class _PresentationOverride:
+    """Toggle macOS Dock autohide for the duration of fullscreen calibration.
+
+    cv2's WND_PROP_FULLSCREEN on macOS is a borderless maxed window, so the
+    Dock area stays reserved and shows through. We flip autohide via
+    `defaults write` + `killall Dock` (no permission prompt required), and
+    restore it on exit. The Dock briefly vanishes and reappears at the
+    boundaries — visible artifact but reliable.
+    """
+
+    def __init__(self) -> None:
+        self._was_hidden = False
+        self._toggled = False
+
+    @staticmethod
+    def _get_autohide() -> bool:
+        result = subprocess.run(
+            ["defaults", "read", "com.apple.dock", "autohide"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            # Key not set yet => default is false.
+            return False
+        return result.stdout.strip() in ("1", "true", "YES")
+
+    @staticmethod
+    def _set_autohide(value: bool) -> None:
+        subprocess.run(
+            ["defaults", "write", "com.apple.dock", "autohide",
+             "-bool", "true" if value else "false"],
+            check=True,
+        )
+        # killall Dock so the new pref is picked up; new Dock process is launchd-respawned.
+        subprocess.run(["killall", "Dock"], check=False,
+                       capture_output=True)
+
+    def __enter__(self) -> "_PresentationOverride":
+        try:
+            self._was_hidden = self._get_autohide()
+        except Exception:
+            return self
+        if not self._was_hidden:
+            try:
+                self._set_autohide(True)
+                self._toggled = True
+                time.sleep(0.6)  # Dock vanish + respawn
+            except Exception as e:
+                print(f"[calibrate] couldn't toggle Dock autohide: {e!r}",
+                      file=sys.stderr)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self._toggled:
+            try:
+                self._set_autohide(False)
+            except Exception:
+                pass
+
+
 def make_grid(n: int) -> list[tuple[float, float]]:
     """An n x n grid of points in [0.05, 0.95] on each axis (inset from edges)."""
     if n < 2:
@@ -45,15 +104,22 @@ VALIDATION_POINTS = [
 ]
 
 
-def _features_from_mean(mean: np.ndarray) -> GazeFeatures:
+def _features_from_vec(v: np.ndarray) -> GazeFeatures:
     return GazeFeatures(
-        l_iris_x=float(mean[0]), l_iris_y=float(mean[1]),
-        r_iris_x=float(mean[2]), r_iris_y=float(mean[3]),
-        yaw=float(mean[4]), pitch=float(mean[5]),
-        l_openness=float(mean[6]), r_openness=float(mean[7]),
-        face_scale=float(mean[8]),
+        l_iris_x=float(v[0]), l_iris_y=float(v[1]),
+        r_iris_x=float(v[2]), r_iris_y=float(v[3]),
+        yaw=float(v[4]), pitch=float(v[5]),
+        l_openness=float(v[6]), r_openness=float(v[7]),
+        face_scale=float(v[8]),
         timestamp=time.time(),
     )
+
+
+def _aggregate(samples: list[GazeFeatures]) -> np.ndarray:
+    """Per-feature median over a batch of frames. Robust to single-frame spikes
+    from blinks / saccades / glasses reflections."""
+    arr = np.array([s.as_vec() for s in samples])
+    return np.median(arr, axis=0)
 
 
 def run_validation(tracker, mapper, *, points: list[tuple[float, float]] | None = None,
@@ -159,9 +225,8 @@ def run_validation(tracker, mapper, *, points: list[tuple[float, float]] | None 
                 print(f"[{_ts()}] {point_status[-1].strip()}", flush=True)
                 continue
 
-            arr = np.array([s.as_vec() for s in captured])
-            mean = arr.mean(axis=0)
-            feat = _features_from_mean(mean)
+            agg = _aggregate(captured)
+            feat = _features_from_vec(agg)
             new_samples.append((tx_n, ty_n, feat))
             try:
                 pnx, pny = mapper.predict(feat)
@@ -240,7 +305,21 @@ def _ts() -> str:
 
 
 def get_screen_size() -> tuple[int, int]:
-    """Width, height of the main display in points (via AppleScript)."""
+    """Width, height of the main display in logical points.
+
+    Prefer NSScreen via PyObjC (already a dep for the overlay) because the
+    osascript Finder route can return a smaller-than-actual rect on some
+    configurations, leaving cv2 with a too-small image and a grey strip down
+    the right edge of fullscreen calibration.
+    """
+    try:
+        from AppKit import NSScreen
+        screen = NSScreen.mainScreen()
+        if screen is not None:
+            f = screen.frame()
+            return int(f.size.width), int(f.size.height)
+    except Exception:
+        pass
     try:
         out = subprocess.run(
             ["osascript", "-e",
@@ -312,11 +391,10 @@ def run_calibration(tracker, *, grid: list[tuple[float, float]],
                     if f is not None:
                         captured.append(f)
                     if len(captured) >= samples_per_point:
-                        arr = np.array([s.as_vec() for s in captured])
-                        mean = arr.mean(axis=0)
-                        samples.append((nx, ny, _features_from_mean(mean)))
+                        agg = _aggregate(captured)
+                        samples.append((nx, ny, _features_from_vec(agg)))
                         print(f"[{_ts()}] captured @ ({nx:.2f},{ny:.2f}) "
-                              f"feat={mean.round(3).tolist()}", flush=True)
+                              f"feat={agg.round(3).tolist()}", flush=True)
                         break
     finally:
         cv2.destroyAllWindows()
@@ -374,6 +452,7 @@ def cmd_calibrate(args) -> int:
           f"{args.samples} frames per point", flush=True)
 
     try:
+      with _PresentationOverride():
         samples = run_calibration(tracker, grid=grid, samples_per_point=args.samples)
 
         if len(samples) < len(grid):
@@ -387,13 +466,16 @@ def cmd_calibrate(args) -> int:
         rx0, ry0 = mapper.residuals or (0.0, 0.0)
         print(f"[{_ts()}] initial fit RMS: x={rx0:.3f} y={ry0:.3f}", flush=True)
 
-        # Validation + refinement.
+        # Validation + refinement. Same _PresentationOverride still active.
         decision = "keep"
         val_samples: list = []
         if not args.skip_validate:
-            print(f"[{_ts()}] validation phase: 5 points, 4s passive each",
+            val_points = (make_grid(args.validation_grid)
+                          if args.validation_grid > 0 else None)
+            n_val = len(val_points) if val_points else len(VALIDATION_POINTS)
+            print(f"[{_ts()}] validation phase: {n_val} points, 4s passive each",
                   flush=True)
-            result = run_validation(tracker, mapper)
+            result = run_validation(tracker, mapper, points=val_points)
             if result is not None:
                 decision, val_samples, _errs = result
             if decision == "abort":

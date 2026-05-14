@@ -226,24 +226,43 @@ class GazeTracker:
 
 
 class SmoothedTracker:
-    """Wraps a GazeTracker with an exponential moving average on the feature vector."""
+    """Smoothing wrapper over GazeTracker. Two modes:
 
-    def __init__(self, base: GazeTracker, alpha: float = 0.5):
+    - "ema" (default): exponential moving average; low latency, low CPU,
+      but a single noisy frame still pulls the output partway.
+    - "median": rolling per-feature median over the last `window` samples.
+      Rejects single-frame outliers cleanly (e.g., specular reflections on
+      glasses or sudden iris-landmark jumps). Costs `window`/2 frames of
+      extra latency.
+    """
+
+    def __init__(self, base: GazeTracker, alpha: float = 0.5,
+                 mode: str = "ema", window: int = 5):
+        if mode not in ("ema", "median"):
+            raise ValueError(f"unknown smoothing mode {mode!r}")
         self.base = base
         self.alpha = float(alpha)
+        self.mode = mode
+        self.window = int(max(1, window))
         self._smoothed: Optional[np.ndarray] = None
-        self._last_ts: float = 0.0
+        self._buf: list[np.ndarray] = []
 
     def get_latest(self, max_age_s: float = 0.5) -> Optional[GazeFeatures]:
         f = self.base.get_latest(max_age_s=max_age_s)
         if f is None:
             return None
         v = f.as_vec()
-        if self._smoothed is None:
-            self._smoothed = v.copy()
-        else:
-            self._smoothed = self.alpha * v + (1 - self.alpha) * self._smoothed
-        s = self._smoothed
+        if self.mode == "median":
+            self._buf.append(v)
+            if len(self._buf) > self.window:
+                self._buf.pop(0)
+            s = np.median(np.stack(self._buf), axis=0)
+        else:  # ema
+            if self._smoothed is None:
+                self._smoothed = v.copy()
+            else:
+                self._smoothed = self.alpha * v + (1 - self.alpha) * self._smoothed
+            s = self._smoothed
         return GazeFeatures(
             l_iris_x=float(s[0]), l_iris_y=float(s[1]),
             r_iris_x=float(s[2]), r_iris_y=float(s[3]),

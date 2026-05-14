@@ -3,6 +3,7 @@ opencv-python>=4.10
 numpy>=1.26,<3
 iterm2>=2.7
 pyobjc-framework-Cocoa>=10
+pyobjc-framework-AVFoundation>=10
 # Voice control (--voice). Heavier deps; bundled so setup.sh is one shot.
 mlx-whisper>=0.4
 silero-vad>=5
