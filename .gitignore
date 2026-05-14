@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Downloaded model (~3 MB, fetched by setup.sh)
+face_landmarker.task
+
+# Per-user calibration lives under ~/.config/gaze-pane/ but ignore stray local copies too
+calibration.json
