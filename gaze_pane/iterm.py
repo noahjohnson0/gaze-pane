@@ -16,13 +16,14 @@ from typing import Optional, Union
 import iterm2
 from iterm2 import Session, Splitter
 
-# Default chrome: title bar + tab bar at top of a stock iTerm2 window, in points.
-# Users with different settings (tab bar off, status bar at bottom, etc) can
-# override via the run-time flag.
+# Default chrome: title bar (~28) + tab bar (~24) at top of a stock iTerm2 window, in points.
+# Fullscreen iTerm hides the title bar, so we subtract TITLE_BAR_HEIGHT below.
+# Users with different settings can override via the run-time flag.
 DEFAULT_CHROME_TOP = 52.0
 DEFAULT_CHROME_BOTTOM = 0.0
 DEFAULT_CHROME_LEFT = 0.0
 DEFAULT_CHROME_RIGHT = 0.0
+TITLE_BAR_HEIGHT = 28.0  # macOS standard title bar height in points
 
 
 @dataclass
@@ -122,6 +123,14 @@ async def get_pane_rects(
     wy = win_frame.origin.y           # Quartz: distance from bottom of screen
     ww = win_frame.size.width
     wh = win_frame.size.height
+
+    # Fullscreen hides the title bar; deduct it from chrome_top.
+    try:
+        is_fullscreen = await win.async_get_fullscreen()
+    except Exception:
+        is_fullscreen = False
+    if is_fullscreen:
+        chrome_top = max(0.0, chrome_top - TITLE_BAR_HEIGHT)
 
     # Window rect in top-left-origin screen coords.
     win_left = wx

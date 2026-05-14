@@ -19,6 +19,8 @@ fi
 source .venv/bin/activate
 python -m pip install -U pip wheel
 python -m pip install -r requirements.txt
+# Editable install so the `gaze-pane` console script works from anywhere.
+python -m pip install -e .
 
 MODEL=face_landmarker.task
 if [ ! -f "$MODEL" ]; then

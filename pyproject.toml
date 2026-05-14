@@ -10,6 +10,7 @@ dependencies = [
     "opencv-python>=4.10",
     "numpy>=1.26,<3",
     "iterm2>=2.7",
+    "pyobjc-framework-Cocoa>=10",
 ]
 
 [project.scripts]

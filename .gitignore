@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 .DS_Store
 
 # Downloaded model (~3 MB, fetched by setup.sh)

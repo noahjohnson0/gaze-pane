@@ -27,20 +27,47 @@ L_EYE_OUTER, L_EYE_INNER = 33, 133
 R_EYE_OUTER, R_EYE_INNER = 263, 362
 L_IRIS_CENTER = 468
 R_IRIS_CENTER = 473
+L_UPPER_LID, L_LOWER_LID = 159, 145
+R_UPPER_LID, R_LOWER_LID = 386, 374
 
 DEFAULT_MODEL = Path(__file__).resolve().parent.parent / "face_landmarker.task"
 
 
 @dataclass
 class GazeFeatures:
-    iris_x: float   # mean iris x-offset, eye-width normalized
-    iris_y: float   # mean iris y-offset, eye-width normalized
-    yaw: float      # head yaw in radians (Y rotation)
-    pitch: float    # head pitch in radians (X rotation)
+    l_iris_x: float    # left iris x-offset, eye-width normalized
+    l_iris_y: float    # left iris y-offset, eye-width normalized
+    r_iris_x: float    # right iris x-offset, eye-width normalized
+    r_iris_y: float    # right iris y-offset, eye-width normalized
+    yaw: float         # head yaw in radians (Y rotation)
+    pitch: float       # head pitch in radians (X rotation)
+    # Eye openness: (lower_lid_y - upper_lid_y) / eye_width. Drops when the user
+    # looks down because the upper lid lowers slightly; better vertical signal
+    # than iris-y alone.
+    l_openness: float
+    r_openness: float
+    # Inter-iris distance in image-normalized coords. Acts as a "how close is
+    # the face to the camera" feature so calibration doesn't fall apart when
+    # you lean in or away.
+    face_scale: float
     timestamp: float
 
+    @property
+    def iris_x(self) -> float:
+        return (self.l_iris_x + self.r_iris_x) / 2
+
+    @property
+    def iris_y(self) -> float:
+        return (self.l_iris_y + self.r_iris_y) / 2
+
     def as_vec(self) -> np.ndarray:
-        return np.array([self.iris_x, self.iris_y, self.yaw, self.pitch], dtype=np.float64)
+        return np.array([
+            self.l_iris_x, self.l_iris_y,
+            self.r_iris_x, self.r_iris_y,
+            self.yaw, self.pitch,
+            self.l_openness, self.r_openness,
+            self.face_scale,
+        ], dtype=np.float64)
 
 
 def _yaw_pitch_from_matrix(m: np.ndarray) -> tuple[float, float]:
@@ -73,8 +100,14 @@ def _extract_features(result, ts: float) -> Optional[GazeFeatures]:
     r_cx, r_cy = (ro[0] + ri[0]) / 2, (ro[1] + ri[1]) / 2
     l_dx, l_dy = (l_iris[0] - l_cx) / l_w, (l_iris[1] - l_cy) / l_w
     r_dx, r_dy = (r_iris[0] - r_cx) / r_w, (r_iris[1] - r_cy) / r_w
-    iris_x = (l_dx + r_dx) / 2
-    iris_y = (l_dy + r_dy) / 2
+
+    # Eye openness: vertical lid gap divided by eye width. Drops a few percent
+    # when the user looks down because the upper lid sags slightly with gaze.
+    l_op = (lms[L_LOWER_LID].y - lms[L_UPPER_LID].y) / l_w
+    r_op = (lms[R_LOWER_LID].y - lms[R_UPPER_LID].y) / r_w
+
+    # Inter-iris distance: larger when face is closer to camera.
+    face_scale = math.hypot(l_iris[0] - r_iris[0], l_iris[1] - r_iris[1])
 
     if result.facial_transformation_matrixes:
         m = np.asarray(result.facial_transformation_matrixes[0])
@@ -82,7 +115,14 @@ def _extract_features(result, ts: float) -> Optional[GazeFeatures]:
     else:
         yaw = pitch = 0.0
 
-    return GazeFeatures(iris_x=iris_x, iris_y=iris_y, yaw=yaw, pitch=pitch, timestamp=ts)
+    return GazeFeatures(
+        l_iris_x=l_dx, l_iris_y=l_dy,
+        r_iris_x=r_dx, r_iris_y=r_dy,
+        yaw=yaw, pitch=pitch,
+        l_openness=l_op, r_openness=r_op,
+        face_scale=face_scale,
+        timestamp=ts,
+    )
 
 
 class GazeTracker:
@@ -205,9 +245,10 @@ class SmoothedTracker:
             self._smoothed = self.alpha * v + (1 - self.alpha) * self._smoothed
         s = self._smoothed
         return GazeFeatures(
-            iris_x=float(s[0]),
-            iris_y=float(s[1]),
-            yaw=float(s[2]),
-            pitch=float(s[3]),
+            l_iris_x=float(s[0]), l_iris_y=float(s[1]),
+            r_iris_x=float(s[2]), r_iris_y=float(s[3]),
+            yaw=float(s[4]), pitch=float(s[5]),
+            l_openness=float(s[6]), r_openness=float(s[7]),
+            face_scale=float(s[8]),
             timestamp=f.timestamp,
         )

@@ -12,10 +12,14 @@ def main() -> int:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pc = sub.add_parser("calibrate", help="run 9-point calibration (fullscreen)")
+    pc = sub.add_parser("calibrate", help="run N x N grid calibration (fullscreen)")
     pc.add_argument("--camera", type=int, default=0, help="cv2 camera index (default 0)")
+    pc.add_argument("--grid", type=int, default=4,
+                    help="grid side (default 4 -> 16 points). 3=fast, 4=balanced, 5=most accurate")
     pc.add_argument("--samples", type=int, default=12,
                     help="frames to average per calibration point (default 12)")
+    pc.add_argument("--skip-validate", dest="skip_validate", action="store_true",
+                    help="skip the post-calibration 5-point validation/refinement phase")
 
     pr = sub.add_parser("run", help="watch gaze and activate panes")
     pr.add_argument("--camera", type=int, default=0)
@@ -31,8 +35,16 @@ def main() -> int:
                     help="points to deduct from top of iTerm window for title+tab bar "
                          "(default 52). Lower if you've hidden the tab bar; raise if you have a "
                          "status bar at the top.")
+    pr.add_argument("--status-every", dest="status_every", type=float, default=2.0,
+                    help="seconds between 'looking at: <pane>' status lines (default 2.0). "
+                         "0.5 minimum.")
+    pr.add_argument("--overlay", action="store_true",
+                    help="show a translucent always-on-top dot at the predicted gaze "
+                         "position (green when inside a known pane, red when outside)")
+    pr.add_argument("--overlay-fps", dest="overlay_fps", type=float, default=30.0,
+                    help="overlay redraw rate (default 30). Ignored without --overlay.")
     pr.add_argument("--debug", action="store_true",
-                    help="print gaze coords + pane hits every ~250ms")
+                    help="print gaze + head features every ~250ms (in addition to status)")
 
     args = p.parse_args()
     if args.cmd == "calibrate":
