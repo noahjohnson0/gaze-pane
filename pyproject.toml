@@ -11,6 +11,9 @@ dependencies = [
     "numpy>=1.26,<3",
     "iterm2>=2.7",
     "pyobjc-framework-Cocoa>=10",
+    "mlx-whisper>=0.4",
+    "silero-vad>=5",
+    "sounddevice>=0.5",
 ]
 
 [project.scripts]

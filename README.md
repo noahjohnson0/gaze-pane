@@ -106,6 +106,7 @@ per point, validation decision) is in the JSON's `metadata` block.
 ```bash
 gaze-pane run --camera 1                          # plain
 gaze-pane run --camera 1 --overlay                # translucent gaze dot, always on top
+gaze-pane run --camera 1 --overlay --voice        # plus hands-free voice command entry
 gaze-pane run --camera 1 --overlay --debug        # plus per-tick gaze + head dump
 ```
 
@@ -122,12 +123,50 @@ Flags:
 | `--status-every` | 2.0 | seconds between "looking at: <pane>" log lines |
 | `--overlay` | off | translucent always-on-top dot; green inside a pane, red outside |
 | `--overlay-fps` | 30 | overlay redraw rate |
+| `--voice` | off | enable voice command entry (see below) |
+| `--wake-phrase` | `"hey claude"` | phrase that begins a voice command |
+| `--end-phrase` | `"send it"` | phrase that submits the voice command + Enter |
+| `--voice-model` | `mlx-community/whisper-small-mlx` | MLX Whisper model id |
 | `--debug` | off | print gaze + head features every ~250 ms |
 
 Ctrl+C cleanly stops the runner (including with `--overlay`, via a SIGINT
 handler that asks AppKit to stop).
 
-## How it works
+## Voice control
+
+`--voice` adds a continuous-listening pipeline: **mic → silero-vad → MLX
+Whisper → wake/end-phrase match → `Session.async_send_text(cmd + "\n")`
+into the currently-focused pane.**
+
+Usage is a wake-word sandwich:
+
+> "**hey claude** git status **send it**"
+
+Whatever you say between the wake and end phrases gets typed into the pane
+gaze-pane currently thinks is focused, followed by Enter. Say nothing
+matching the pattern and nothing is sent. Say the wake without the end and
+nothing is sent.
+
+Things to know:
+
+- **macOS will ask for Microphone permission** for whatever terminal you
+  launch from, the same way it asks for Camera permission. Allow it.
+- The Whisper model (~500 MB for `small`) is downloaded on first use to
+  `~/.cache/huggingface/hub/`. First utterance after that has ~200-300 ms
+  of transcription latency on M-series; subsequent are warmer.
+- Whisper is great at English prose, less great at shell syntax. Saying
+  "list files" gets typed verbatim, not translated to `ls`. Phrase commands
+  the way you'd actually type them: "ls dash l a", "cd repos slash gaze pane",
+  "git pull".
+- The wake phrase is substring-matched in the transcript, so misrecognitions
+  like "hey clod" or "hey claud" will not trigger. If you have an accent or
+  Whisper consistently mishears yours, override `--wake-phrase` with a
+  phrase that transcribes reliably.
+- The recipient pane is whatever gaze-pane considers focused at the moment
+  the command is dispatched, not at the moment you started speaking. Look
+  at the pane *before* you say the end phrase.
+
+
 
 1. **Capture.** OpenCV pulls frames from the webcam in a background thread at
    ~30 fps.

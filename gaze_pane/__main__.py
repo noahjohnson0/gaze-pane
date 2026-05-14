@@ -43,6 +43,19 @@ def main() -> int:
                          "position (green when inside a known pane, red when outside)")
     pr.add_argument("--overlay-fps", dest="overlay_fps", type=float, default=30.0,
                     help="overlay redraw rate (default 30). Ignored without --overlay.")
+    pr.add_argument("--voice", action="store_true",
+                    help="enable voice control: speak commands and they're sent to "
+                         "the pane you're focused on")
+    pr.add_argument("--wake-phrase", dest="wake_phrase", default="hey claude",
+                    help="phrase that begins a voice command (default: 'hey claude')")
+    pr.add_argument("--end-phrase", dest="end_phrase", default="send it",
+                    help="phrase that submits the voice command + Enter "
+                         "(default: 'send it')")
+    pr.add_argument("--voice-model", dest="voice_model",
+                    default="mlx-community/whisper-small-mlx",
+                    help="MLX Whisper model id (default whisper-small-mlx). "
+                         "Try mlx-community/whisper-medium-mlx for harder accents "
+                         "/ shell tokens, at the cost of ~300 ms extra latency.")
     pr.add_argument("--debug", action="store_true",
                     help="print gaze + head features every ~250ms (in addition to status)")
 

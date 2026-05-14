@@ -43,6 +43,21 @@ def cmd_run(args) -> int:
     print(f"[{_ts()}] webcam + face landmarker running", flush=True)
     tracker = SmoothedTracker(base, alpha=args.alpha)
 
+    voice = None
+    if args.voice:
+        from .voice import VoiceListener
+        voice = VoiceListener(
+            wake_phrase=args.wake_phrase,
+            end_phrase=args.end_phrase,
+            model=args.voice_model,
+        )
+        try:
+            voice.start()
+        except Exception as e:
+            print(f"[{_ts()}] voice listener failed to start: {e!r}",
+                  file=sys.stderr)
+            voice = None
+
     # When --overlay is set, the asyncio loop publishes the latest gaze + hit
     # to this shared state; the AppKit thread reads it to drive the dot.
     gaze_state = {"nx": -1.0, "ny": -1.0, "hit": False, "ts": 0.0}
@@ -129,6 +144,31 @@ def cmd_run(args) -> int:
                           f"iris=({f.iris_x:+.2f},{f.iris_y:+.2f}) -> {where}",
                           flush=True)
 
+            # Drain any voice commands; send them to whatever pane we currently
+            # consider focused. We don't gate this on "hit" because the user
+            # may have looked away after issuing the command.
+            if voice is not None:
+                cmd = voice.get_command()
+                if cmd:
+                    target_id = last_activated or active_session
+                    target_sess = next(
+                        (r.session for r in pane_rects
+                         if r.session_id == target_id), None)
+                    if target_sess is None and pane_rects:
+                        target_sess = pane_rects[0].session
+                    if target_sess is not None:
+                        try:
+                            await target_sess.async_send_text(cmd + "\n")
+                            print(f"[{_ts()}] voice -> "
+                                  f"{target_sess.session_id[:8]}: {cmd!r}",
+                                  flush=True)
+                        except Exception as e:
+                            print(f"[{_ts()}] voice send failed: {e!r}",
+                                  file=sys.stderr)
+                    else:
+                        print(f"[{_ts()}] voice command dropped (no pane): "
+                              f"{cmd!r}", file=sys.stderr)
+
             if hit is None:
                 await asyncio.sleep(tick_period)
                 continue
@@ -194,6 +234,8 @@ def cmd_run(args) -> int:
             print(f"\n[{_ts()}] stopping...", flush=True)
         finally:
             stop_event.set()
+            if voice is not None:
+                voice.stop()
             base.stop()
         return 0
 
@@ -207,5 +249,7 @@ def cmd_run(args) -> int:
               "Enable Python API", file=sys.stderr)
         return 2
     finally:
+        if voice is not None:
+            voice.stop()
         base.stop()
     return 0
