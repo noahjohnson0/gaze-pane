@@ -45,6 +45,7 @@ class _GazeView(NSView):
         self._y = -1.0
         self._radius = 14.0
         self._hit = True   # whether the gaze landed in a known pane (green) or not (red)
+        self._frame_size = (frame.size.width, frame.size.height)
         return self
 
     def isOpaque(self):
@@ -57,6 +58,19 @@ class _GazeView(NSView):
         self.setNeedsDisplay_(True)
 
     def drawRect_(self, _rect):
+        # Always draw a small status indicator in the bottom-right so the
+        # overlay is visible even before we have gaze data. Helps confirm the
+        # window is actually on top of fullscreen iTerm2.
+        sw, sh = self._frame_size
+        ind_rect = NSMakeRect(sw - 26, 18, 8, 8)
+        ind = NSBezierPath.bezierPathWithOvalInRect_(ind_rect)
+        if self._x < 0:
+            # No gaze yet — pulse a faint amber dot.
+            NSColor.colorWithRed_green_blue_alpha_(1.0, 0.8, 0.2, 0.6).setFill()
+        else:
+            NSColor.colorWithRed_green_blue_alpha_(0.3, 1.0, 0.5, 0.6).setFill()
+        ind.fill()
+
         if self._x < 0:
             return
         r = self._radius
@@ -150,7 +164,9 @@ class Overlay:
         )
         view = _GazeView.alloc().initWithFrame_(frame)
         window.setContentView_(view)
-        window.orderFront_(None)
+        # orderFrontRegardless_ forces this window in front even when iTerm2 in
+        # fullscreen owns the active Space. Plain orderFront_ won't cross over.
+        window.orderFrontRegardless()
 
         def on_tick():
             if self._stop_event.is_set():
