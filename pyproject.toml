@@ -15,6 +15,7 @@ dependencies = [
     "mlx-whisper>=0.4",
     "silero-vad>=5",
     "sounddevice>=0.5",
+    "pynput>=1.7",
 ]
 
 [project.scripts]

@@ -77,6 +77,16 @@ def _ensure_mic_permission(timeout_s: float = 30.0) -> bool:
 SAMPLE_RATE = 16_000      # MLX Whisper expects 16 kHz mono float32
 FRAME = 512               # Silero VAD requires 512-sample (32 ms) chunks at 16 kHz
 
+# Words too common to be useful as control-phrase signal.
+_STOPWORDS = {"the", "a", "an", "of", "in", "on", "at", "to", "for", "and",
+              "or", "is", "be", "this", "that"}
+
+
+def _keywords(phrase: str) -> set[str]:
+    """Distinctive words in a phrase; used for tolerant control-phrase match."""
+    return {w for w in re.findall(r"\w+", phrase.lower())
+            if w and w not in _STOPWORDS}
+
 
 def _ts() -> str:
     return time.strftime("%H:%M:%S")
@@ -111,6 +121,15 @@ class VoiceListener:
         self.end = end_phrase.lower().strip()
         self.lock = lock_phrase.lower().strip()
         self.unlock = unlock_phrase.lower().strip()
+        self._lock_kw = _keywords(self.lock)
+        self._unlock_kw = _keywords(self.unlock)
+        # Bias whisper toward our trigger phrases so "lock the pane" doesn't
+        # come back as "luck the pain". Empty string -> no bias.
+        self._whisper_prompt = (
+            f"Voice phrases: {wake_phrase}, {end_phrase}, "
+            f"{lock_phrase}, {unlock_phrase}. "
+            "Shell commands: git, npm, python, ls, cd, mkdir, rm, cat, echo."
+        )
         self.model = model
         self.device = device
         self.verbose = verbose
@@ -136,6 +155,12 @@ class VoiceListener:
         self._cmd_buffer: str = ""
         self._cmd_started_at: float = 0.0
         self.cmd_timeout_s: float = 10.0
+
+        # Rolling window of recent words for tolerant control-phrase matching.
+        # Lets "lock" and "pane" land in separate utterances within a few
+        # seconds and still trigger the lock action.
+        self._recent_words: list[tuple[float, str]] = []
+        self.control_window_s: float = 3.0
 
         # Diagnostic stats; printed every ~2s by a watcher thread.
         self._stats_lock = threading.Lock()
@@ -302,6 +327,7 @@ class VoiceListener:
                     audio,
                     path_or_hf_repo=self.model,
                     language="en",
+                    initial_prompt=self._whisper_prompt,
                 )
                 text = (result.get("text") or "").strip().lower()
             except Exception as e:
@@ -318,28 +344,37 @@ class VoiceListener:
 
         Lock/unlock control phrases short-circuit: they trigger immediately and
         do not flow through the wake/end command path or get typed into a pane.
+        Matching is by keyword-set within a sliding window so e.g. "lock" and
+        "pane" landing in separate utterances within a few seconds still fires.
         """
         if not text:
             return
-        # Control phrases first; check the more specific (longer) one first so
-        # 'unlock the pane' isn't shadowed by 'lock the pane'.
-        if self.unlock and self.unlock in text:
+        now = time.time()
+
+        # Update rolling word window and check control phrases first.
+        for w in re.findall(r"\w+", text.lower()):
+            self._recent_words.append((now, w))
+        cutoff = now - self.control_window_s
+        self._recent_words = [(t, w) for t, w in self._recent_words if t > cutoff]
+        recent_set = {w for _, w in self._recent_words}
+
+        # Unlock first (more specific keyword "unlock" is rarer than "lock").
+        if self._unlock_kw and self._unlock_kw.issubset(recent_set):
             if self.verbose:
                 print(f"[{_ts()}] [voice] -> unlock", flush=True)
             self.control_queue.put("unlock")
-            # Reset any in-progress command capture; the user wants control back.
+            self._recent_words.clear()
             self._cmd_state = "idle"
             self._cmd_buffer = ""
             return
-        if self.lock and self.lock in text:
+        if self._lock_kw and self._lock_kw.issubset(recent_set):
             if self.verbose:
                 print(f"[{_ts()}] [voice] -> lock", flush=True)
             self.control_queue.put("lock")
+            self._recent_words.clear()
             self._cmd_state = "idle"
             self._cmd_buffer = ""
             return
-
-        now = time.time()
 
         # Time-out stale recording so a missed end phrase doesn't leave us
         # buffering forever.
@@ -378,6 +413,17 @@ class VoiceListener:
             self._dispatch(buf)
             self._cmd_state = "idle"
             self._cmd_buffer = ""
+            return
+        # If wake is heard again while we're already recording, treat it as a
+        # restart rather than appending more text to a stale buffer.
+        wake_idx = text.find(self.wake)
+        if wake_idx >= 0:
+            after_wake = text[wake_idx + len(self.wake):].strip()
+            self._cmd_buffer = after_wake
+            self._cmd_started_at = now
+            if self.verbose:
+                print(f"[{_ts()}] [voice] wake heard again, restarting buffer "
+                      f"-> {self._cmd_buffer!r}", flush=True)
             return
         # Just more command text -> append.
         self._cmd_buffer = (self._cmd_buffer + " " + text).strip()

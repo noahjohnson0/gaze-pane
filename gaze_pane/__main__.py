@@ -88,6 +88,17 @@ def main() -> int:
                     help="audio input device index for --voice. "
                          "Inspect the list printed at startup; default is the "
                          "system default mic.")
+    pr.add_argument("--correct", action="store_true",
+                    help="enable mid-session bias correction. Look at your "
+                         "mouse cursor and press --correct-hotkey to capture a "
+                         "(mouse - predicted-gaze) offset that's added to all "
+                         "subsequent predictions. Needs macOS Accessibility "
+                         "permission for your terminal app.")
+    pr.add_argument("--correct-hotkey", dest="correct_hotkey",
+                    default="<ctrl>+<shift>+g",
+                    help="global hotkey for --correct (pynput syntax; default "
+                         "ctrl+shift+g). Examples: '<cmd>+<shift>+g', "
+                         "'<alt>+<f1>'.")
     pr.add_argument("--debug", action="store_true",
                     help="print gaze + head features every ~250ms (in addition to status)")
 

@@ -48,6 +48,36 @@ def cmd_run(args) -> int:
         window=args.median_window,
     )
 
+    # Mid-session bias correction (Ctrl-Shift-G by default). Updated by the
+    # global hotkey thread; read in the loop and added to mapper.predict output.
+    bias_lock = threading.Lock()
+    bias_x = 0.0
+    bias_y = 0.0
+    correct = None
+
+    def _apply_correction(bx: float, by: float, mxy: tuple[float, float]) -> None:
+        nonlocal bias_x, bias_y
+        with bias_lock:
+            bias_x = bx
+            bias_y = by
+        print(f"[{_ts()}] correction applied: bias=({bx:+.3f},{by:+.3f}) "
+              f"to align with mouse @ ({mxy[0]:.2f},{mxy[1]:.2f})", flush=True)
+
+    if args.correct:
+        from .correct import CorrectionListener
+        correct = CorrectionListener(
+            hotkey=args.correct_hotkey,
+            tracker=tracker,
+            mapper=mapper,
+            on_apply=_apply_correction,
+        )
+        try:
+            correct.start()
+        except Exception as e:
+            print(f"[{_ts()}] correction listener failed to start: {e!r}",
+                  file=sys.stderr)
+            correct = None
+
     voice = None
     if args.voice:
         from .voice import VoiceListener
@@ -137,6 +167,9 @@ def cmd_run(args) -> int:
                 continue
 
             nx, ny = mapper.predict(f)
+            with bias_lock:
+                nx += bias_x
+                ny += bias_y
             hit = next((r for r in pane_rects if r.contains(nx, ny)), None)
             publish_gaze(nx, ny, hit is not None)
 
@@ -274,6 +307,8 @@ def cmd_run(args) -> int:
             print(f"\n[{_ts()}] stopping...", flush=True)
         finally:
             stop_event.set()
+            if correct is not None:
+                correct.stop()
             if voice is not None:
                 voice.stop()
             base.stop()
@@ -289,6 +324,8 @@ def cmd_run(args) -> int:
               "Enable Python API", file=sys.stderr)
         return 2
     finally:
+        if correct is not None:
+            correct.stop()
         if voice is not None:
             voice.stop()
         base.stop()
