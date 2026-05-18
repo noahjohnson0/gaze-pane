@@ -217,20 +217,35 @@ class VoiceListener:
         stats.start()
         self._workers.append(stats)
 
-        # Show available input devices once so a wrong default is obvious.
+        try:
+            default_in = sd.default.device[0] if isinstance(
+                sd.default.device, (list, tuple)) else sd.default.device
+        except Exception:
+            default_in = None
+        input_devices = [(i, d) for i, d in enumerate(sd.query_devices())
+                         if d.get("max_input_channels", 0) > 0]
+
+        # PortAudio's default input is often unset on macOS (sd.default.device
+        # == -1 or pointing at an output device), and InputStream(device=None)
+        # then opens a stream that returns pure silence. Auto-pick the first
+        # input-capable device when --voice-device wasn't passed and the
+        # system default isn't a valid input.
+        if self.device is None:
+            default_is_input = any(i == default_in for i, _ in input_devices)
+            if not default_is_input and input_devices:
+                self.device = input_devices[0][0]
+                if self.verbose:
+                    name = input_devices[0][1]["name"]
+                    print(f"[{_ts()}] [voice] no valid system default mic; "
+                          f"auto-selected [{self.device}] {name}", flush=True)
+
         if self.verbose:
             print(f"[{_ts()}] [voice] audio input devices:", flush=True)
-            try:
-                default_in = sd.default.device[0] if isinstance(
-                    sd.default.device, (list, tuple)) else sd.default.device
-            except Exception:
-                default_in = None
-            for i, d in enumerate(sd.query_devices()):
-                if d.get("max_input_channels", 0) > 0:
-                    mark = " (default)" if i == default_in else ""
-                    used = " (using)" if i == self.device else ""
-                    print(f"        [{i}] {d['name']}  "
-                          f"{d['max_input_channels']}ch{mark}{used}", flush=True)
+            for i, d in input_devices:
+                mark = " (default)" if i == default_in else ""
+                used = " (using)" if i == self.device else ""
+                print(f"        [{i}] {d['name']}  "
+                      f"{d['max_input_channels']}ch{mark}{used}", flush=True)
 
         self._mic_stream = sd.InputStream(
             samplerate=SAMPLE_RATE, channels=1, dtype="float32",
