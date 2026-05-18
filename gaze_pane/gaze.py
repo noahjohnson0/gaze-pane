@@ -30,7 +30,42 @@ R_IRIS_CENTER = 473
 L_UPPER_LID, L_LOWER_LID = 159, 145
 R_UPPER_LID, R_LOWER_LID = 386, 374
 
-DEFAULT_MODEL = Path(__file__).resolve().parent.parent / "face_landmarker.task"
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/latest/face_landmarker.task"
+)
+
+
+def _resolve_model_path() -> Path:
+    """Return a usable path to face_landmarker.task, downloading if missing.
+
+    Search order:
+      1. repo-root sibling (development checkout, fetched by setup.sh)
+      2. ~/.cache/gaze-pane/face_landmarker.task (download cache)
+    The cache path is created on demand by fetching from MediaPipe's public
+    Google Storage bucket — same URL setup.sh uses.
+    """
+    dev_path = Path(__file__).resolve().parent.parent / "face_landmarker.task"
+    if dev_path.exists():
+        return dev_path
+
+    cache_dir = Path(os.environ.get("XDG_CACHE_HOME",
+                                    Path.home() / ".cache")) / "gaze-pane"
+    cache_path = cache_dir / "face_landmarker.task"
+    if cache_path.exists():
+        return cache_path
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[gaze-pane] downloading MediaPipe face landmarker model "
+          f"(~3.6 MB) -> {cache_path}", flush=True)
+    import urllib.request
+    tmp = cache_path.with_suffix(".task.partial")
+    urllib.request.urlretrieve(_MODEL_URL, tmp)
+    tmp.replace(cache_path)
+    return cache_path
+
+
+DEFAULT_MODEL = _resolve_model_path  # callable; resolved lazily in GazeTracker
 
 
 @dataclass
@@ -133,16 +168,17 @@ class GazeTracker:
     """
 
     def __init__(self, *, model_path: Optional[Path] = None, camera_index: int = 0):
-        self.model_path = Path(model_path) if model_path else DEFAULT_MODEL
+        self.model_path = (Path(model_path) if model_path
+                           else _resolve_model_path())
         if not self.model_path.exists():
             raise FileNotFoundError(
-                f"MediaPipe model not found at {self.model_path}. "
-                "Run ./setup.sh to download it."
+                f"MediaPipe model not found at {self.model_path}."
             )
         self.camera_index = camera_index
         self._cap: Optional[cv2.VideoCapture] = None
         self._landmarker = None
         self._latest: Optional[GazeFeatures] = None
+        self._latest_frame: Optional[np.ndarray] = None
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -192,9 +228,17 @@ class GazeTracker:
             except Exception:
                 continue
             features = _extract_features(result, ts=ts_ms / 1000.0)
-            if features is not None:
-                with self._lock:
+            with self._lock:
+                # Always publish the latest frame for the webcam preview, even
+                # when no face is detected — keeps the thumbnail live.
+                self._latest_frame = frame
+                if features is not None:
                     self._latest = features
+
+    def get_latest_frame(self) -> Optional[np.ndarray]:
+        """Most recent (mirrored, BGR) webcam frame, or None if not started."""
+        with self._lock:
+            return self._latest_frame
 
     def get_latest(self, max_age_s: float = 0.5) -> Optional[GazeFeatures]:
         with self._lock:

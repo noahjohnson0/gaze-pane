@@ -102,7 +102,7 @@ def cmd_run(args) -> int:
     gaze_lock = threading.Lock()
 
     def publish_gaze(nx: float, ny: float, hit: bool) -> None:
-        if not args.overlay:
+        if not (args.overlay or args.webcam_overlay):
             return
         with gaze_lock:
             gaze_state["nx"] = nx
@@ -264,7 +264,8 @@ def cmd_run(args) -> int:
 
             await asyncio.sleep(tick_period)
 
-    if args.overlay:
+    overlay_on = args.overlay or args.webcam_overlay
+    if overlay_on:
         from .overlay import Overlay  # lazy import; only needs PyObjC on this path
         stop_event = threading.Event()
 
@@ -294,14 +295,24 @@ def cmd_run(args) -> int:
                 return None
             return (nx, ny, hit)
 
-        print(f"[{_ts()}] overlay enabled (translucent dot, main screen)",
-              flush=True)
+        bits = []
+        if args.overlay and not args.no_dot:
+            bits.append("dot")
+        if args.webcam_overlay:
+            bits.append("webcam thumbnail")
+        print(f"[{_ts()}] overlay enabled ({', '.join(bits) or 'nothing'}, "
+              f"main screen)", flush=True)
+
+        get_webcam = base.get_latest_frame if args.webcam_overlay else None
+        show_dot = (args.overlay and not args.no_dot)
         try:
             Overlay(
                 get_gaze,
                 stop_event,
                 fps=args.overlay_fps,
                 smoothing_alpha=args.overlay_smoothing,
+                get_webcam_frame=get_webcam,
+                show_dot=show_dot,
             ).run()
         except KeyboardInterrupt:
             print(f"\n[{_ts()}] stopping...", flush=True)

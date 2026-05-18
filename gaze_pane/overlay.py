@@ -13,6 +13,7 @@ from __future__ import annotations
 import threading
 from typing import Callable, Optional
 
+import numpy as np
 import objc
 from AppKit import (
     NSApplication,
@@ -20,6 +21,7 @@ from AppKit import (
     NSBackingStoreBuffered,
     NSBezierPath,
     NSColor,
+    NSImage,
     NSScreen,
     NSScreenSaverWindowLevel,
     NSView,
@@ -30,7 +32,30 @@ from AppKit import (
     NSWindowCollectionBehaviorTransient,
     NSWindowStyleMaskBorderless,
 )
-from Foundation import NSMakeRect, NSObject, NSTimer
+from Foundation import NSData, NSMakeRect, NSObject, NSTimer
+
+
+def _bgr_to_grayscale_nsimage(frame_bgr: np.ndarray,
+                              thumb_w: int = 200) -> Optional[NSImage]:
+    """Convert an OpenCV BGR frame to a small B&W NSImage for the corner thumbnail.
+
+    Round-trips through PNG bytes — slightly more CPU than raw pixel planes
+    but avoids fragile PyObjC bitmap-rep gymnastics, and at thumbnail size
+    + ~30 fps the cost is negligible.
+    """
+    if frame_bgr is None or frame_bgr.size == 0:
+        return None
+    h, w = frame_bgr.shape[:2]
+    thumb_h = max(1, int(round(h * (thumb_w / float(w)))))
+    import cv2  # local: keep overlay import side-effect-free
+    small = cv2.resize(frame_bgr, (thumb_w, thumb_h),
+                       interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    ok, buf = cv2.imencode(".png", gray)
+    if not ok:
+        return None
+    data = NSData.dataWithBytes_length_(bytes(buf.tobytes()), buf.size)
+    return NSImage.alloc().initWithData_(data)
 
 
 class _GazeView(NSView):
@@ -52,6 +77,9 @@ class _GazeView(NSView):
         self._smooth_alpha = 0.2
         self._smooth_x = -1.0
         self._smooth_y = -1.0
+        # B&W webcam thumbnail (top-left). Set when --webcam-overlay is on.
+        self._webcam_image: Optional[NSImage] = None
+        self._show_dot = True
         return self
 
     def isOpaque(self):
@@ -64,6 +92,13 @@ class _GazeView(NSView):
         if a > 1.0:
             a = 1.0
         self._smooth_alpha = a
+
+    def setWebcamImage_(self, image):
+        self._webcam_image = image
+        self.setNeedsDisplay_(True)
+
+    def setShowDot_(self, show: bool):
+        self._show_dot = bool(show)
 
     def setX_y_hit_(self, x: float, y: float, hit: bool):
         if x < 0 or self._smooth_x < 0:
@@ -93,7 +128,16 @@ class _GazeView(NSView):
             NSColor.colorWithRed_green_blue_alpha_(0.3, 1.0, 0.5, 0.6).setFill()
         ind.fill()
 
-        if self._x < 0:
+        if self._webcam_image is not None:
+            img_w, img_h = 200.0, 150.0
+            margin = 24.0
+            # Top-left corner in Cocoa bottom-left coords.
+            rect = NSMakeRect(margin, sh - margin - img_h, img_w, img_h)
+            self._webcam_image.drawInRect_fromRect_operation_fraction_(
+                rect, NSMakeRect(0, 0, 0, 0), 1, 0.8
+            )
+
+        if not self._show_dot or self._x < 0:
             return
         r = self._radius
         rect = NSMakeRect(self._x - r, self._y - r, 2 * r, 2 * r)
@@ -144,11 +188,15 @@ class Overlay:
         stop_event: threading.Event,
         fps: float = 30.0,
         smoothing_alpha: float = 0.2,
+        get_webcam_frame: Optional[Callable[[], Optional["np.ndarray"]]] = None,
+        show_dot: bool = True,
     ):
         self._get_gaze = get_gaze
         self._stop_event = stop_event
         self._fps = max(5.0, fps)
         self._smoothing_alpha = float(smoothing_alpha)
+        self._get_webcam_frame = get_webcam_frame
+        self._show_dot = show_dot
 
     def run(self) -> None:
         # Make Ctrl-C exit even though the main thread is inside AppKit.run().
@@ -188,6 +236,7 @@ class Overlay:
         )
         view = _GazeView.alloc().initWithFrame_(frame)
         view.setSmoothAlpha_(self._smoothing_alpha)
+        view.setShowDot_(self._show_dot)
         window.setContentView_(view)
         # orderFrontRegardless_ forces this window in front even when iTerm2 in
         # fullscreen owns the active Space. Plain orderFront_ won't cross over.
@@ -197,6 +246,12 @@ class Overlay:
             if self._stop_event.is_set():
                 NSApplication.sharedApplication().stop_(None)
                 return
+            if self._get_webcam_frame is not None:
+                frame_bgr = self._get_webcam_frame()
+                if frame_bgr is not None:
+                    img = _bgr_to_grayscale_nsimage(frame_bgr)
+                    if img is not None:
+                        view.setWebcamImage_(img)
             data = self._get_gaze()
             if data is None:
                 view.setX_y_hit_(-1.0, -1.0, True)

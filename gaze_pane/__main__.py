@@ -58,6 +58,16 @@ def main() -> int:
                          "position (green when inside a known pane, red when outside)")
     pr.add_argument("--overlay-fps", dest="overlay_fps", type=float, default=30.0,
                     help="overlay redraw rate (default 30). Ignored without --overlay.")
+    pr.add_argument("--webcam-overlay", dest="webcam_overlay",
+                    action="store_true",
+                    help="show a small black-and-white webcam thumbnail in "
+                         "the top-left of the screen so you can see what the "
+                         "tracker is seeing. Implies --overlay infrastructure "
+                         "(adds the AppKit window); pass --no-dot to hide the "
+                         "gaze dot if you only want the thumbnail.")
+    pr.add_argument("--no-dot", dest="no_dot", action="store_true",
+                    help="when --overlay or --webcam-overlay is set, hide the "
+                         "gaze dot. Useful with --webcam-overlay alone.")
     pr.add_argument("--overlay-smoothing", dest="overlay_smoothing",
                     type=float, default=0.2,
                     help="EMA alpha applied to the dot's screen position "
