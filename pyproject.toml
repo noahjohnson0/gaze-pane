@@ -1,6 +1,6 @@
 [project]
 name = "gaze-pane"
-version = "0.1.1"
+version = "0.1.2"
 description = "Auto-select the iTerm2 pane you're looking at, via webcam gaze tracking."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"

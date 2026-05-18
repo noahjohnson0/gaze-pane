@@ -12,6 +12,11 @@ def main() -> int:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    sub.add_parser(
+        "cameras",
+        help="list available webcams (cv2 index + AVFoundation device name) "
+             "so you can pick the right --camera value")
+
     pc = sub.add_parser("calibrate", help="run N x N grid calibration (fullscreen)")
     pc.add_argument("--camera", type=int, default=0, help="cv2 camera index (default 0)")
     pc.add_argument("--grid", type=int, default=4,
@@ -113,6 +118,9 @@ def main() -> int:
                     help="print gaze + head features every ~250ms (in addition to status)")
 
     args = p.parse_args()
+    if args.cmd == "cameras":
+        from .cameras import cmd_cameras
+        return cmd_cameras(args)
     if args.cmd == "calibrate":
         from .calibrate import cmd_calibrate
         return cmd_calibrate(args)
