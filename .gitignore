@@ -4,6 +4,12 @@ __pycache__/
 *.pyo
 *.egg-info/
 .DS_Store
+.env
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.idea/
+.vscode/
 
 # Downloaded model (~3 MB, fetched by setup.sh)
 face_landmarker.task
