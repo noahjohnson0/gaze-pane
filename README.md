@@ -1,11 +1,14 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.png">
-    <img src="docs/assets/logo-light.png" alt="gaze-pane" width="200">
-  </picture>
-</p>
-
-# gaze-pane
+<table border="0" cellspacing="0" cellpadding="0">
+<tr>
+<td width="220" valign="middle">
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.png">
+<img src="docs/assets/logo-light.png" alt="gaze-pane" width="200">
+</picture>
+</td>
+<td valign="middle"><h1>G&nbsp;A&nbsp;Z&nbsp;E &nbsp; P&nbsp;A&nbsp;N&nbsp;E</h1></td>
+</tr>
+</table>
 
 Auto-select the iTerm2 pane you're looking at. Webcam tracks your eyes, a
 ridge-regularized affine model maps gaze to screen position, and the iTerm2
