@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="gaze-pane" width="200">
+</p>
+
 # gaze-pane
 
 Auto-select the iTerm2 pane you're looking at. Webcam tracks your eyes, a
